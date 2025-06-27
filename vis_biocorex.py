@@ -111,124 +111,103 @@ def flip_topic_signs_by_correlation(corex, X, gene_names=None, verbose=False):
                 print(f"Flipped topic {j} for positive correlation with top gene {gname}")
     return corex
 
-
+import numpy as np
+import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.cm import ScalarMappable
-from scipy.stats import kendalltau
-from wordcloud import WordCloud
-import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib import gridspec
+from wordcloud import WordCloud
+from scipy.stats import kendalltau
+
 
 class ColorByKendallTau:
-    """
-    Callable class that maps a gene name to an RGB color based on its Kendall tau correlation.
-
-    Parameters
-    ----------
-    word_to_corr : dict
-        Dictionary mapping words (gene names) to Kendall's tau values (range: -1 to 1).
-    threshold : float
-        Tau values below this absolute threshold are treated as zero (white).
-
-    Usage
-    -----
-    color_func = ColorByKendallTau(word_to_corr)
-    wordcloud.recolor(color_func=color_func)
-    """
     def __init__(self, word_to_corr, threshold=0.05):
-        """
-        Parameters:
-            word_to_corr (dict): maps words to Kendall's tau values in [-1, 1]
-            threshold (float): absolute tau values below this are considered "neutral" (white)
-        """
         self.word_to_corr = word_to_corr
         self.threshold = threshold
-
         self.norm = mcolors.TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
         self.cmap = plt.get_cmap("bwr")
 
     def __call__(self, word, **kwargs):
         tau = self.word_to_corr.get(word, 0.0)
-        if abs(tau) < self.threshold:
-            tau = 0.0
+        tau = 0.0 if abs(tau) < self.threshold else tau
         r, g, b, _ = self.cmap(self.norm(tau))
         return f"rgb({int(r*255)}, {int(g*255)}, {int(b*255)})"
 
 
-def plot_corex_wordclouds_grid(corex, X, gene_names, valid_topics=None, max_genes=100, n_cols=3):    
+def plot_corex_wordclouds_grid(corex, X, gene_names, valid_topics=None, max_genes=100, n_cols=3):
     """
-    Plots a grid of word clouds for Corex topics, with color encoding of gene-topic correlations.
+    Plot a grid of Corex topic word clouds where:
+    - Size ∝ (alpha * mis) = gene's importance to topic
+    - Color ∝ Kendall's tau between gene and topic label
 
     Parameters
     ----------
-    corex : Corex or Corex-like object
-        Trained Corex model or simulated version with attributes .labels, .alpha, .mis.
+    corex : Corex object
+        Trained Corex model.
     X : np.ndarray
-        Expression data (samples × genes).
+        Data matrix (samples × genes).
     gene_names : list of str
-        Gene names corresponding to columns of X.
+        Names of genes/features.
     valid_topics : list of int or None
-        Indices of topics to include. If None, uses all topics.
+        Topics to include. If None, uses all.
     max_genes : int
-        Max number of genes to include in each word cloud.
+        Maximum genes per topic to show.
     n_cols : int
-        Number of columns in the word cloud grid.
-
-    Notes
-    -----
-    - The title of each subplot includes the topic’s total correlation (TC).
-    - A horizontal colorbar indicates Kendall's tau values (blue = negative, red = positive).
+        Number of columns in plot grid.
     """
-
-    X = X.toarray() if not isinstance(X, np.ndarray) else X
+    if not isinstance(X, np.ndarray):
+        X = X.toarray()
     gene_names = np.array(gene_names)
     valid_topics = valid_topics or list(range(corex.n_hidden))
-    labels = corex.labels
     n_topics = len(valid_topics)
     n_rows = int(np.ceil(n_topics / n_cols))
 
-    # Prepare grid with space below for colorbar
+    # Set up grid with extra row for colorbar
     fig = plt.figure(figsize=(5 * n_cols, 4 * n_rows + 1))
     spec = gridspec.GridSpec(n_rows + 1, n_cols, height_ratios=[4]*n_rows + [0.2])
     axs = [fig.add_subplot(spec[i, j]) for i in range(n_rows) for j in range(n_cols)]
 
-    # Compute Kendall tau
+    # Precompute Kendall tau correlations
+    labels = corex.labels
     correlations = np.zeros((corex.n_hidden, X.shape[1]))
     for i in valid_topics:
         for j in range(X.shape[1]):
             tau, _ = kendalltau(X[:, j], labels[:, i])
             correlations[i, j] = tau if not np.isnan(tau) else 0.0
 
-    for plot_idx, i in enumerate(valid_topics):
-        weights = (corex.alpha[i, :, 0] * corex.mis[i]).clip(min=0)
+    # Word clouds
+    for plot_idx, topic_idx in enumerate(valid_topics):
+        ax = axs[plot_idx]
+        weights = (corex.alpha[topic_idx, :, 0] * corex.mis[topic_idx]).clip(min=0)
         top = np.argsort(weights)[-max_genes:]
+
         word_freq = {gene_names[j]: weights[j] for j in top if weights[j] > 0}
-        word_corr = {gene_names[j]: correlations[i, j] for j in top}
+        word_corr = {gene_names[j]: correlations[topic_idx, j] for j in top}
 
         wc = WordCloud(width=400, height=300, background_color='white')
         wc.generate_from_frequencies(word_freq)
         wc.recolor(color_func=ColorByKendallTau(word_corr))
 
-        axs[plot_idx].imshow(wc, interpolation='bilinear')
-        tc_value = corex.tcs[i] if hasattr(corex, "tcs") else np.nan
-        axs[plot_idx].set_title(f"Topic {i} (TC={tc_value:.2f})")
-        axs[plot_idx].axis('off')
+        ax.imshow(wc, interpolation='bilinear')
+        tc_val = corex.tcs[topic_idx] if hasattr(corex, "tcs") else np.nan
+        ax.set_title(f"Topic {topic_idx} (TC = {tc_val:.2f})", fontsize=12)
+        ax.axis("off")
 
-    # Hide unused subplots
+    # Hide unused axes
     for j in range(len(valid_topics), len(axs)):
-        axs[j].axis('off')
+        axs[j].axis("off")
 
-    # Add horizontal colorbar across entire bottom row
+    # Colorbar
     cax = fig.add_subplot(spec[-1, :])
     norm = mcolors.TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
     sm = ScalarMappable(cmap="bwr", norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, cax=cax, orientation='horizontal')
-    cbar.set_label("Kendall's Tau Correlation (Gene ↔ Topic Status)")
+    cbar.set_label("Kendall's Tau (Gene ↔ Topic)", fontsize=12)
 
-    fig.tight_layout(rect=[0, 0.05, 1, 1])  # leave space at bottom
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
     plt.show()
+
 
 
 
@@ -519,7 +498,7 @@ if __name__ == "__main__":
     X, gene_names, G, A, true_corex = generator.generate()
 
     valid_topics_list, corexes = run_corex_with_filtering(
-        X, gene_names, layers=[3], filtering=True, verbose=True,
+        X, gene_names, layers=[5], filtering=True, verbose=True,
         marginal='gaussian', dim_hidden=2, n_cpu=4
     )
     corexes[0] = flip_topic_signs_by_correlation(corexes[0], X, gene_names, verbose=True)
