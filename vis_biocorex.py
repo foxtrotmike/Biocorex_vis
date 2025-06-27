@@ -14,44 +14,42 @@ import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from scipy.stats import kendalltau
 
+import numpy as np
+import corex as ce
 
 def run_corex_with_filtering(X, gene_names, layers=[10], dim_hidden=2, tc_threshold=1e-3,
-                             marginal='gaussian', filtering=True, verbose=False, **kwargs):    
+                             marginal='gaussian', filtering=True, verbose=False, **kwargs):
     """
-    Runs one or more layers of CorEx on the given data, with optional topic filtering and flipping.
+    Trains Corex model(s) layer-wise on data X.
 
     Parameters
     ----------
     X : array-like
-        Data matrix (samples × genes), either dense or sparse.
-    gene_names : list of str
-        Names of the genes (features).
+        Input data matrix (samples × genes), dense or sparse.
+    gene_names : list
+        List of gene/feature names.
     layers : list of int
-        Number of topics to extract at each layer.
+        Number of topics per layer.
     dim_hidden : int
-        Number of latent states per topic (usually 2).
+        Latent states per topic (usually 2).
     tc_threshold : float
-        Minimum total correlation to retain a topic.
+        Minimum total correlation to retain topic.
     marginal : str
-        Marginal description (usually "gaussian" for continuous inputs).
+        Type of marginal (e.g., 'gaussian').
     filtering : bool
-        Whether to filter low-TC topics.
+        Whether to remove low-TC topics.
     verbose : bool
-        Print information about flipped topics.
+        If True, prints Corex messages.
+    kwargs : dict
+        Additional arguments to Corex constructor.
 
     Returns
     -------
     valid_topics_list : list of lists
-        Indices of retained topics for each layer.
-    corexes : list of Corex objects
+        Retained topic indices for each layer.
+    corexes : list
         Trained Corex models for each layer.
-
-    Notes
-    -----
-    - The first layer flips topic labels if their correlation with the top contributing gene is negative.
-    - Flipping ensures interpretability (topic status positively associated with top gene).
     """
-
     if not isinstance(X, np.ndarray):
         X = X.toarray()
 
@@ -63,25 +61,6 @@ def run_corex_with_filtering(X, gene_names, layers=[10], dim_hidden=2, tc_thresh
                          marginal_description=marginal_type,
                          verbose=verbose, **kwargs)
         model.fit(current_input)
-
-        # === Flip topic directions if needed ===
-        if i == 0 and marginal == 'gaussian':  # Only do this for first layer on continuous data
-            for j in range(model.n_hidden):
-                # Get the variable most associated with this topic (highest alpha * MI)
-                contrib = model.alpha[j, :, 0] * model.mis[j]
-                top_gene_idx = np.argmax(contrib)
-
-                topic_values = model.labels[:, j]
-                gene_values = X[:, top_gene_idx]
-
-                tau, _ = kendalltau(topic_values, gene_values)
-                if tau < 0:
-                    # Flip topic direction: replace label x with dim_hidden - 1 - x
-                    model.labels[:, j] = dim_hidden - 1 - model.labels[:, j]
-                    model.p_y_given_x[j] = model.p_y_given_x[j][:, ::-1]  # flip the probability axis
-                    if verbose:
-                        print(f"Flipped topic {j} to ensure positive correlation with gene {gene_names[top_gene_idx]}")
-
         corexes.append(model)
         current_input = model.labels
 
@@ -94,6 +73,43 @@ def run_corex_with_filtering(X, gene_names, layers=[10], dim_hidden=2, tc_thresh
         valid_topics_list.append(valid)
 
     return valid_topics_list, corexes
+
+from scipy.stats import kendalltau
+
+def flip_topic_signs_by_correlation(corex, X, gene_names=None, verbose=False):
+    """
+    Flips topic directions to ensure positive Kendall tau correlation with most contributing gene.
+
+    Parameters
+    ----------
+    corex : Corex or FakeCorex object
+        Trained model with `.labels`, `.alpha`, `.mis`.
+    X : np.ndarray
+        Expression matrix (samples × genes).
+    gene_names : list of str, optional
+        Gene names for logging.
+    verbose : bool
+        If True, prints which topics were flipped.
+
+    Returns
+    -------
+    corex : Corex object (modified in-place)
+    """
+    if not isinstance(X, np.ndarray):
+        X = X.toarray()
+
+    for j in range(corex.n_hidden):
+        contrib = corex.alpha[j, :, 0] * corex.mis[j]
+        top_gene_idx = np.argmax(contrib)
+        tau, _ = kendalltau(X[:, top_gene_idx], corex.labels[:, j])
+        if tau < 0:
+            corex.labels[:, j] = 1 - corex.labels[:, j]  # flip 0↔1
+            if hasattr(corex, "p_y_given_x"):  # flip probability matrix if exists
+                corex.p_y_given_x[j] = corex.p_y_given_x[j][:, ::-1]
+            if verbose:
+                gname = gene_names[top_gene_idx] if gene_names else f"G{top_gene_idx}"
+                print(f"Flipped topic {j} for positive correlation with top gene {gname}")
+    return corex
 
 
 import matplotlib.colors as mcolors
@@ -506,6 +522,7 @@ if __name__ == "__main__":
         X, gene_names, layers=[3], filtering=True, verbose=True,
         marginal='gaussian', dim_hidden=2, n_cpu=4
     )
+    corexes[0] = flip_topic_signs_by_correlation(corexes[0], X, gene_names, verbose=True)
 
     plot_corex_wordclouds_grid(corexes[0], X, gene_names, valid_topics=valid_topics_list[0])
     plot_corex_wordclouds_grid(true_corex, X, gene_names); plt.title("True")
