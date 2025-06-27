@@ -137,8 +137,8 @@ class ColorByKendallTau:
 def plot_corex_wordclouds_grid(corex, X, gene_names, valid_topics=None, max_genes=100, n_cols=3):
     """
     Plot a grid of Corex topic word clouds where:
-    - Size ∝ (alpha * mis) = gene's importance to topic
-    - Color ∝ Kendall's tau between gene and topic label
+    - Size ∝ (alpha * mis) = gene's importance to topic (absolute contribution of gene j to topic i in terms of information content.)
+    - Color ∝ Kendall's tau between gene and topic label (to show direction of association)
 
     Parameters
     ----------
