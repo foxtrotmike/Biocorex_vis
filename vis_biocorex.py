@@ -338,6 +338,98 @@ def plot_expression_bicluster_heatmap(X, gene_names, corex, valid_topics,
     plt.xticks(rotation=90)
     plt.tight_layout()
     plt.show()
+    
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import kendalltau
+from scipy.cluster.hierarchy import linkage, leaves_list
+from matplotlib.colors import Normalize
+
+def plot_topicwise_expression_with_status(X, gene_names, corex, valid_topics=None,
+                                                         max_genes=10, tau_threshold=0.2, p_threshold=0.01):
+    """
+    For each topic, plot a heatmap of expression (genes in rows, patients in columns),
+    grouped by topic status (0 or 1), clustered within each group,
+    with a horizontal colorbar showing topic status aligned to columns.
+
+    Parameters
+    ----------
+    X : np.ndarray or sparse
+        Expression data (samples × genes).
+    gene_names : list of str
+        Gene names corresponding to columns of X.
+    corex : Corex
+        Trained Corex model with .labels attribute.
+    valid_topics : list of int, optional
+        Topic indices to plot. If None, all topics are used.
+    max_genes : int
+        Number of top correlated genes per topic to show.
+    tau_threshold : float
+        Minimum Kendall tau absolute value to consider a gene.
+    p_threshold : float
+        Max p-value for Kendall tau to be considered significant.
+    """
+    X = X.toarray() if not isinstance(X, np.ndarray) else X
+    gene_names = np.array(gene_names)
+    labels = corex.labels
+    valid_topics = valid_topics or list(range(corex.n_hidden))
+
+    for topic_idx in valid_topics:
+        topic_status = labels[:, topic_idx]
+        gene_corrs = []
+        for gene_idx in range(X.shape[1]):
+            tau, p = kendalltau(X[:, gene_idx], topic_status)
+            if not np.isnan(tau) and abs(tau) >= tau_threshold and p < p_threshold:
+                gene_corrs.append((gene_idx, tau))
+
+        if not gene_corrs:
+            print(f"No significant genes found for topic {topic_idx}")
+            continue
+
+        gene_corrs.sort(key=lambda x: -abs(x[1]))
+        top_genes = [idx for idx, _ in gene_corrs[:max_genes]]
+        gene_labels = [gene_names[i] for i in top_genes]
+        topic_expr = X[:, top_genes]
+
+        # Group samples by topic status
+        group_0 = np.where(topic_status == 0)[0]
+        group_1 = np.where(topic_status == 1)[0]
+
+        def cluster_indices(group):
+            if len(group) <= 2:
+                return group
+            linkage_matrix = linkage(topic_expr[group].T, method='average')
+            return group[leaves_list(linkage_matrix)]
+
+        ordered_0 = cluster_indices(group_0)
+        ordered_1 = cluster_indices(group_1)
+        ordered_idx = np.concatenate([ordered_0, ordered_1])
+        status_bar = topic_status[ordered_idx]
+
+        # Subset and reorder
+        X_ordered = topic_expr[ordered_idx].T  # now shape (genes, patients)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        norm = Normalize(vmin=np.percentile(X_ordered, 5), vmax=np.percentile(X_ordered, 95))
+        sns.heatmap(X_ordered, ax=ax, cmap='vlag', cbar=True,
+                    xticklabels=False, yticklabels=gene_labels,
+                    linewidths=0.2, norm=norm)
+
+        ax.set_title(f"Topic {topic_idx} | Top Genes by τ")
+        ax.set_xlabel("Samples (clustered within topic status)")
+        ax.set_ylabel("Genes")
+
+        # Add topic status bar below
+        ax_status = ax.inset_axes([0, -0.05, 1, 0.05], transform=ax.transAxes)
+        ax_status.imshow(status_bar[None, :], aspect='auto', cmap='coolwarm', interpolation='nearest')
+        ax_status.set_xticks([])
+        ax_status.set_yticks([])
+        ax_status.set_ylabel("Status", rotation=0, labelpad=20)
+
+        plt.tight_layout()
+        plt.show()
+
 
 
 import numpy as np
@@ -527,7 +619,7 @@ def topic_correlation_matrix(A, method='pearson'):
                               index=[f"T{i}" for i in range(n_topics)])
 
 
-# === QUICK TESTING BLOCK ===
+#%% === QUICK TESTING BLOCK ===
 if __name__ == "__main__":
     generator = CorexDataGenerator()
     X, gene_names, G, A, true_corex = generator.generate()
@@ -544,7 +636,17 @@ if __name__ == "__main__":
     plot_sample_topic_bicluster(corexes[0], valid_topics_list[0])
     plot_sample_topic_bicluster(true_corex)
     #%%
-    plot_expression_bicluster_heatmap(X, gene_names, corexes[0], valid_topics_list[0])
+    #plot_expression_bicluster_heatmap(X, gene_names, corexes[0], valid_topics_list[0])
+    plot_topicwise_expression_with_status(
+    X=X,
+    gene_names=gene_names,
+    corex=corexes[0],
+    
+    max_genes=10,
+    tau_threshold=0.2,
+    p_threshold=0.01
+)
+
     #%%Correlation among topics
     corr_df = topic_correlation_matrix(A, method='kendall')
     print(corr_df)
