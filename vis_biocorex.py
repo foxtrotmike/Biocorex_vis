@@ -137,8 +137,8 @@ class ColorByKendallTau:
 def plot_corex_wordclouds_grid(corex, X, gene_names, valid_topics=None, max_genes=100, n_cols=3):
     """
     Plot a grid of Corex topic word clouds where:
-    - Size ∝ (alpha * mis) = gene's importance to topic (absolute contribution of gene j to topic i in terms of information content.)
-    - Color ∝ Kendall's tau between gene and topic label (to show direction of association)
+    - Size ∝ (alpha * mis) = gene's importance to topic
+    - Color ∝ Kendall's tau between gene and topic label
 
     Parameters
     ----------
@@ -490,6 +490,41 @@ class CorexDataGenerator:
         gene_names = [f"G{j}" for j in range(total_genes)]
         true_corex = FakeCorex(G=G, A=A)
         return X, gene_names, G, A, true_corex
+import pandas as pd
+from scipy.stats import pearsonr, spearmanr, kendalltau
+
+def topic_correlation_matrix(A, method='pearson'):
+    """
+    Compute pairwise topic correlation matrix.
+
+    Parameters
+    ----------
+    A : np.ndarray
+        (n_samples × n_topics) matrix of topic activations
+    method : str
+        'pearson', 'spearman', or 'kendall'
+
+    Returns
+    -------
+    corr_df : pd.DataFrame
+        Symmetric topic-topic correlation matrix
+    """
+    n_topics = A.shape[1]
+    corr = np.zeros((n_topics, n_topics))
+
+    for i in range(n_topics):
+        for j in range(n_topics):
+            if method == 'pearson':
+                corr[i, j], _ = pearsonr(A[:, i], A[:, j])
+            elif method == 'spearman':
+                corr[i, j], _ = spearmanr(A[:, i], A[:, j])
+            elif method == 'kendall':
+                corr[i, j], _ = kendalltau(A[:, i], A[:, j])
+            else:
+                raise ValueError("Unknown method")
+
+    return pd.DataFrame(corr, columns=[f"T{i}" for i in range(n_topics)],
+                              index=[f"T{i}" for i in range(n_topics)])
 
 
 # === QUICK TESTING BLOCK ===
@@ -498,7 +533,7 @@ if __name__ == "__main__":
     X, gene_names, G, A, true_corex = generator.generate()
 
     valid_topics_list, corexes = run_corex_with_filtering(
-        X, gene_names, layers=[5], filtering=True, verbose=True,
+        X, gene_names, layers=[3], filtering=True, verbose=True,
         marginal='gaussian', dim_hidden=2, n_cpu=4
     )
     corexes[0] = flip_topic_signs_by_correlation(corexes[0], X, gene_names, verbose=True)
@@ -508,6 +543,11 @@ if __name__ == "__main__":
     # Show topic-patient bicluster heatmap
     plot_sample_topic_bicluster(corexes[0], valid_topics_list[0])
     plot_sample_topic_bicluster(true_corex)
-    #plot_expression_bicluster_heatmap(X, gene_names, corexes[0], valid_topics_list[0])
+    #%%
+    plot_expression_bicluster_heatmap(X, gene_names, corexes[0], valid_topics_list[0])
+    #%%Correlation among topics
+    corr_df = topic_correlation_matrix(A, method='kendall')
+    print(corr_df)
+
 
 
